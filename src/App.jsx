@@ -239,7 +239,7 @@ export default function App() {
     const blob = new Blob([result], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = url;   
     a.download = 'ocr-result.md';
     a.click();
     URL.revokeObjectURL(url);
