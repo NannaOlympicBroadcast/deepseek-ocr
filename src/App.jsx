@@ -232,7 +232,7 @@ export default function App() {
       setTaskStatus('');
     } finally {
       setLoading(false);
-    }
+    }    
   };
 
   const downloadResult = () => {
