@@ -69,7 +69,7 @@ export default function App() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin
+        redirectTo: `${window.location.origin}/`
       }
     });
     if (error) alert(error.message);
@@ -147,53 +147,82 @@ export default function App() {
       attempts++;
       setTaskStatus(`检查任务状态 [${attempts}/${maxAttempts}]...`);
 
-      const response = await fetch(`${API_BASE}/task/${taskId}`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
-        }
-      });
-
-      const result = await response.json();
-
-      if (result.error) {
-        throw new Error(`${result.error}: ${result.message || '未知错误'}`);
-      }
-
-      const status = result.status || 'unknown';
-      setTaskStatus(`状态: ${status}`);
-
-      if (status === 'success') {
-        if (result.output && result.output.file_url) {
-          const duration = (result.completed_at - result.started_at) / 1000;
-          setTaskStatus(`✅ 完成！用时: ${duration.toFixed(2)}秒`);
-          
-          const contentResponse = await fetch(result.output.file_url);
-          const content = await contentResponse.text();
-          setResult(content);
-
-          // 保存到数据库
-          if (user) {
-            await supabase.from('ocr_history').insert({
-              user_id: user.id,
-              task_id: taskId,
-              image_url: imagePreview,
-              result: content,
-              prompt: prompt
-            });
-            
-            loadUserData(user.id);
+      try {
+        const response = await fetch(`${API_BASE}/task/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`
           }
+        });
 
-          return result;
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-      } else if (status === 'failed' || status === 'cancelled') {
-        throw new Error(`任务${status === 'failed' ? '失败' : '已取消'}`);
-      }
 
-      await new Promise(resolve => setTimeout(resolve, 10000));
+        const result = await response.json();
+        console.log('任务状态:', result);
+
+        if (result.error) {
+          throw new Error(`${result.error}: ${result.message || '未知错误'}`);
+        }
+
+        const status = result.status || 'unknown';
+        setTaskStatus(`状态: ${status} (尝试 ${attempts}/${maxAttempts})`);
+
+        if (status === 'success') {
+          if (result.output && result.output.file_url) {
+            const duration = (result.completed_at - result.started_at) / 1000;
+            setTaskStatus(`✅ 正在获取结果...`);
+            
+            console.log('获取结果 URL:', result.output.file_url);
+            
+            // 获取 OCR 结果内容
+            const contentResponse = await fetch(result.output.file_url);
+            
+            if (!contentResponse.ok) {
+              throw new Error('无法获取 OCR 结果');
+            }
+            
+            const content = await contentResponse.text();
+            console.log('OCR 结果:', content);
+            
+            setResult(content);
+            setTaskStatus(`✅ 完成！用时: ${duration.toFixed(2)}秒`);
+
+            // 保存到历史记录
+            if (user) {
+              try {
+                await supabase.from('ocr_history').insert({
+                  user_id: user.id,
+                  task_id: taskId,
+                  image_url: imagePreview,
+                  result: content,
+                  prompt: prompt
+                });
+                
+                loadUserData(user.id);
+              } catch (dbError) {
+                console.error('保存到数据库失败:', dbError);
+              }
+            }
+
+            return result;
+          } else {
+            throw new Error('任务完成但没有返回结果 URL');
+          }
+        } else if (status === 'failed' || status === 'cancelled') {
+          const errorMsg = result.message || result.error_message || '未知错误';
+          throw new Error(`任务${status === 'failed' ? '失败' : '已取消'}: ${errorMsg}`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        
+      } catch (error) {
+        console.error('轮询任务时出错:', error);
+        throw error;
+      }
     }
 
-    throw new Error('任务超时');
+    throw new Error('任务超时（等待时间超过 30 分钟）');
   };
 
   const handleOCR = async () => {
@@ -232,14 +261,14 @@ export default function App() {
       setTaskStatus('');
     } finally {
       setLoading(false);
-    }    
+    }
   };
 
   const downloadResult = () => {
     const blob = new Blob([result], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;   
+    a.href = url;
     a.download = 'ocr-result.md';
     a.click();
     URL.revokeObjectURL(url);
