@@ -281,7 +281,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <Camera className="w-8 h-8 text-blue-600" />
-            <h1 className="text-2xl font-bold text-gray-800">DeepSeek OCR</h1>
+            <h1 className="text-2xl font-bold text-gray-800">布偶快扫</h1>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-600">{user.email}</span>
@@ -467,7 +467,8 @@ export default function App() {
       </main>
 
       <footer className="max-w-7xl mx-auto px-4 py-6 text-center text-sm text-gray-500">
-        <p>使用 DeepSeek OCR API 提供服务</p>
+        <p>水木心育旗下基于Deepseek-OCR大模型的OCR服务</p>
+        <p>Copyright © 2025 水木服务网格. 津ICP备2025035405号-1</p>
       </footer>
     </div>
   );
