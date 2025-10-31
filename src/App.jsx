@@ -17,7 +17,6 @@ export default function App() {
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    // 检查用户登录状态
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -25,7 +24,6 @@ export default function App() {
       }
     });
 
-    // 监听认证状态变化
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -38,7 +36,6 @@ export default function App() {
 
   const loadUserData = async (userId) => {
     try {
-      // 加载 API Key
       const { data: keyData } = await supabase
         .from('user_api_keys')
         .select('api_key')
@@ -49,7 +46,6 @@ export default function App() {
         setApiKey(keyData.api_key);
       }
 
-      // 加载历史记录
       const { data: historyData } = await supabase
         .from('ocr_history')
         .select('*')
@@ -133,7 +129,8 @@ export default function App() {
     });
 
     if (!response.ok) {
-      throw new Error('上传失败');
+      const errorText = await response.text();
+      throw new Error(`上传失败 (${response.status}): ${errorText}`);
     }
 
     return await response.json();
@@ -145,12 +142,15 @@ export default function App() {
 
     while (attempts < maxAttempts) {
       attempts++;
-      setTaskStatus(`检查任务状态 [${attempts}/${maxAttempts}]...`);
+      const statusMsg = `检查任务状态 [${attempts}/${maxAttempts}]...`;
+      console.log(statusMsg);
+      setTaskStatus(statusMsg);
 
       try {
         const response = await fetch(`${API_BASE}/task/${taskId}`, {
           headers: {
-            'Authorization': `Bearer ${apiKey}`
+            'Authorization': `Bearer ${apiKey}`,
+            'X-Failover-Enabled': 'true'
           }
         });
 
@@ -159,34 +159,80 @@ export default function App() {
         }
 
         const result = await response.json();
-        console.log('任务状态:', result);
+        console.log('完整任务响应:', JSON.stringify(result, null, 2));
 
         if (result.error) {
-          throw new Error(`${result.error}: ${result.message || '未知错误'}`);
+          throw new Error(`${result.error}: ${result.message || 'Unknown error'}`);
         }
 
         const status = result.status || 'unknown';
-        setTaskStatus(`状态: ${status} (尝试 ${attempts}/${maxAttempts})`);
+        console.log('任务状态:', status);
+        setTaskStatus(`状态: ${status} [${attempts}/${maxAttempts}]`);
 
         if (status === 'success') {
+          let content = '';
+          let hasResult = false;
+
+          // 方案1: 有 file_url (需要下载)
           if (result.output && result.output.file_url) {
-            const duration = (result.completed_at - result.started_at) / 1000;
-            setTaskStatus(`✅ 正在获取结果...`);
+            console.log('📎 发现 file_url:', result.output.file_url);
+            setTaskStatus('✅ 正在下载结果...');
             
-            console.log('获取结果 URL:', result.output.file_url);
-            
-            // 获取 OCR 结果内容
-            const contentResponse = await fetch(result.output.file_url);
-            
-            if (!contentResponse.ok) {
-              throw new Error('无法获取 OCR 结果');
+            try {
+              const contentResponse = await fetch(result.output.file_url);
+              if (contentResponse.ok) {
+                content = await contentResponse.text();
+                hasResult = true;
+                console.log('📥 从 file_url 获取内容成功，长度:', content.length);
+              }
+            } catch (e) {
+              console.error('从 file_url 下载失败:', e);
             }
+          }
+
+          // 方案2: 直接在 output 中有内容
+          if (!hasResult && result.output) {
+            if (result.output.text) {
+              content = result.output.text;
+              hasResult = true;
+              console.log('📝 从 output.text 获取内容');
+            } else if (result.output.markdown) {
+              content = result.output.markdown;
+              hasResult = true;
+              console.log('📝 从 output.markdown 获取内容');
+            } else if (result.output.content) {
+              content = result.output.content;
+              hasResult = true;
+              console.log('📝 从 output.content 获取内容');
+            }
+          }
+
+          // 方案3: 直接在 result 字段
+          if (!hasResult && result.result) {
+            content = typeof result.result === 'string' 
+              ? result.result 
+              : JSON.stringify(result.result, null, 2);
+            hasResult = true;
+            console.log('📝 从 result 字段获取内容');
+          }
+
+          // 方案4: 在 data 字段
+          if (!hasResult && result.data) {
+            content = typeof result.data === 'string'
+              ? result.data
+              : JSON.stringify(result.data, null, 2);
+            hasResult = true;
+            console.log('📝 从 data 字段获取内容');
+          }
+
+          if (hasResult && content) {
+            const duration = result.completed_at && result.started_at
+              ? ((result.completed_at - result.started_at) / 1000).toFixed(2)
+              : '未知';
             
-            const content = await contentResponse.text();
-            console.log('OCR 结果:', content);
-            
+            console.log('✅ OCR 结果内容预览:', content.substring(0, 200));
             setResult(content);
-            setTaskStatus(`✅ 完成！用时: ${duration.toFixed(2)}秒`);
+            setTaskStatus(`✅ 完成！用时: ${duration} 秒`);
 
             // 保存到历史记录
             if (user) {
@@ -198,7 +244,6 @@ export default function App() {
                   result: content,
                   prompt: prompt
                 });
-                
                 loadUserData(user.id);
               } catch (dbError) {
                 console.error('保存到数据库失败:', dbError);
@@ -207,22 +252,34 @@ export default function App() {
 
             return result;
           } else {
-            throw new Error('任务完成但没有返回结果 URL');
+            console.error('⚠️ 任务成功但没有找到结果内容');
+            console.error('完整响应:', result);
+            setTaskStatus('⚠️ 任务完成但未找到结果内容');
+            
+            const debugInfo = `任务完成，但未找到标准格式的结果。\n\n完整响应：\n${JSON.stringify(result, null, 2)}`;
+            setResult(debugInfo);
+            
+            return result;
           }
-        } else if (status === 'failed' || status === 'cancelled') {
+        } 
+        else if (status === 'failed' || status === 'cancelled') {
           const errorMsg = result.message || result.error_message || '未知错误';
+          console.error('❌ 任务失败:', errorMsg);
           throw new Error(`任务${status === 'failed' ? '失败' : '已取消'}: ${errorMsg}`);
         }
-
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        else {
+          console.log('⏳ 任务处理中，10秒后重试...');
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          continue;
+        }
         
       } catch (error) {
-        console.error('轮询任务时出错:', error);
+        console.error('❌ 轮询错误:', error);
         throw error;
       }
     }
 
-    throw new Error('任务超时（等待时间超过 30 分钟）');
+    throw new Error('⏰ 任务超时（等待时间超过 30 分钟）');
   };
 
   const handleOCR = async () => {
@@ -247,18 +304,24 @@ export default function App() {
     setTaskStatus('正在创建任务...');
 
     try {
+      console.log('🚀 开始上传图片...');
       const uploadResult = await uploadToGitee(image);
+      console.log('✅ 上传结果:', uploadResult);
+      
       const taskId = uploadResult.task_id;
 
       if (!taskId) {
         throw new Error('未获取到任务ID');
       }
 
-      setTaskStatus(`任务ID: ${taskId}`);
+      console.log('🆔 任务 ID:', taskId);
+      setTaskStatus(`任务ID: ${taskId}，开始轮询...`);
       await pollTask(taskId);
+      
     } catch (error) {
+      console.error('❌ OCR 处理错误:', error);
       alert(`错误: ${error.message}`);
-      setTaskStatus('');
+      setTaskStatus(`❌ 错误: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -313,20 +376,20 @@ export default function App() {
             <h1 className="text-2xl font-bold text-gray-800">布偶快扫</h1>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-600">{user.email}</span>
+            <span className="text-sm text-gray-600 hidden md:inline">{user.email}</span>
             <button
               onClick={() => setShowSettings(!showSettings)}
               className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
             >
               <Settings className="w-5 h-5" />
-              <span>设置</span>
+              <span className="hidden md:inline">设置</span>
             </button>
             <button
               onClick={signOut}
               className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition"
             >
               <LogOut className="w-5 h-5" />
-              <span>退出</span>
+              <span className="hidden md:inline">退出</span>
             </button>
           </div>
         </div>
@@ -456,15 +519,20 @@ export default function App() {
               )}
             </div>
 
-            <div className="border border-gray-200 rounded-lg p-4 min-h-96 max-h-96 overflow-auto bg-gray-50">
+            <div className="border border-gray-200 rounded-lg p-4 min-h-96 max-h-96 overflow-auto bg-gray-50 font-mono text-sm">
               {result ? (
-                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono">
+                <div className="whitespace-pre-wrap text-gray-800">
                   {result}
-                </pre>
+                </div>
+              ) : loading ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <Loader2 className="w-12 h-12 animate-spin mb-4" />
+                  <p>正在识别中，请稍候...</p>
+                </div>
               ) : (
-                <p className="text-gray-400 text-center mt-20">
-                  识别结果将显示在这里
-                </p>
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-400">识别结果将显示在这里</p>
+                </div>
               )}
             </div>
           </div>
