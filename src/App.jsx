@@ -209,7 +209,7 @@ export default function OCRApp() {
           <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-blue-500">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Key className="w-5 h-5" />
-              API 设置
+              API 设置（请不要在公用电脑上填入你的付费api-key）
             </h2>
             <div className="space-y-4">
               <div>
