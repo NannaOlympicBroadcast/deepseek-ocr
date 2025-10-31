@@ -433,6 +433,7 @@ export default function OCRApp() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   OCR 提示词
                 </label>
+                <p>需要模型执行的任务，提示词需要以&lt;image&gt;为开头</p>
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
